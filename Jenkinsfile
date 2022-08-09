@@ -1,69 +1,39 @@
 pipeline {
-
-    agent {
-        node {
-            label 'master'
-        }
+  agent any
+  stages {
+    stage('Docker Build') {
+      steps {
+        sh "docker build -t kmlaydin/podinfo:${env.BUILD_NUMBER} ."
+      }
     }
-
-    options {
-        buildDiscarder logRotator( 
-                    daysToKeepStr: '16', 
-                    numToKeepStr: '10'
-            )
+    stage('Docker Push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub', passwordVariable: 'dockerHubPassword', usernameVariable: 'dockerHubUser')]) {
+          sh "docker login -u ${env.dockerHubUser} -p ${env.dockerHubPassword}"
+          sh "docker push kmlaydin/podinfo:${env.BUILD_NUMBER}"
+        }
+      }
     }
-
-    stages {
-        
-        stage('Cleanup Workspace') {
-            steps {
-                cleanWs()
-                sh """
-                echo "Cleaned Up Workspace For Project"
-                """
-            }
+    stage('Docker Remove Image') {
+      steps {
+        sh "docker rmi kmlaydin/podinfo:${env.BUILD_NUMBER}"
+      }
+    }
+    stage('Apply Kubernetes Files') {
+      steps {
+          withKubeConfig([credentialsId: 'kubeconfig']) {
+          sh 'cat deployment.yaml | sed "s/{{BUILD_NUMBER}}/$BUILD_NUMBER/g" | kubectl apply -f -'
+          sh 'kubectl apply -f service.yaml'
         }
-
-        stage('Code Checkout') {
-            steps {
-                checkout([
-                    $class: 'GitSCM', 
-                    branches: [[name: '*/main']], 
-                    userRemoteConfigs: [[url: 'https://github.com/spring-projects/spring-petclinic.git']]
-                ])
-            }
-        }
-
-        stage(' Unit Testing') {
-            steps {
-                sh """
-                echo "Running Unit Tests"
-                """
-            }
-        }
-
-        stage('Code Analysis') {
-            steps {
-                sh """
-                echo "Running Code Analysis"
-                """
-            }
-        }
-
-        stage('Build Deploy Code') {
-            when {
-                branch 'develop'
-            }
-            steps {
-                sh """
-                echo "Building Artifact"
-                """
-
-                sh """
-                echo "Deploying Code"
-                """
-            }
-        }
-
-    }   
+      }
+  }
+}
+post {
+    success {
+      slackSend(message: "Pipeline is successfully completed.")
+    }
+    failure {
+      slackSend(message: "Pipeline failed. Please check the logs.")
+    }
+}
 }
